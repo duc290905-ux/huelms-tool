@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<title>HUELMS Study Scanner</title>
+<style>
+:root{color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+*{box-sizing:border-box}body{margin:0;background:#0b1020;color:#f8fafc;padding:16px;max-width:760px;margin:auto}
+h1{font-size:24px;margin:6px 0}p{color:#cbd5e1;line-height:1.45}.card{background:#151d31;border:1px solid #2c3853;border-radius:16px;padding:14px;margin:14px 0}
+video{width:100%;border-radius:12px;background:#000;max-height:45vh;object-fit:cover}
+button{border:0;border-radius:12px;padding:13px 15px;font-size:16px;font-weight:650;margin:4px 3px 4px 0;background:#60a5fa;color:#07111f}
+button.secondary{background:#334155;color:#f8fafc}button.stop{background:#f87171;color:#260707}
+textarea{width:100%;min-height:145px;background:#080d18;color:#f8fafc;border:1px solid #475569;border-radius:12px;padding:12px;font:16px/1.45 inherit}
+small,.muted{color:#94a3b8}#status{font-weight:600;color:#93c5fd}.row{display:flex;flex-wrap:wrap;gap:4px}
+</style>
+</head>
+<body>
+<h1>📷 HUELMS Study Scanner</h1>
+<p>Quét câu hỏi bằng camera, nhận dạng chữ liên tục và sao chép câu hỏi để nhờ ChatGPT giải thích đáp án.</p>
+<div class="card">
+  <video id="video" autoplay playsinline muted></video>
+  <div class="row">
+    <button id="start">Bật camera</button>
+    <button id="scan" class="secondary" disabled>Quét ngay</button>
+    <button id="stop" class="stop" disabled>Dừng</button>
+  </div>
+  <p id="status">Sẵn sàng. Đặt câu hỏi trước camera, đủ sáng và giữ máy ổn định.</p>
+  <small>Để camera hoạt động, trang cần được mở bằng địa chỉ HTTPS và bạn phải cho phép quyền Camera.</small>
+</div>
+<div class="card">
+  <h3>Văn bản nhận diện</h3>
+  <textarea id="output" placeholder="Câu hỏi nhận diện được sẽ hiện ở đây…"></textarea>
+  <div class="row">
+    <button id="copy">Sao chép câu hỏi</button>
+    <button id="ask" class="secondary">Mở ChatGPT</button>
+    <button id="clear" class="secondary">Xóa nội dung</button>
+  </div>
+  <p class="muted">Công cụ nhận dạng chữ (OCR), không tự truy cập tài khoản HUELMS và không tự nộp bài. Hãy kiểm tra lại chữ/đáp án nhận diện.</p>
+</div>
+<canvas id="canvas" hidden></canvas>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+const video=document.getElementById('video'), canvas=document.getElementById('canvas'), ctx=canvas.getContext('2d');
+const output=document.getElementById('output'), status=document.getElementById('status');
+const startBtn=document.getElementById('start'), scanBtn=document.getElementById('scan'), stopBtn=document.getElementById('stop');
+let stream=null, worker=null, scanning=false, busy=false, timer=null, lastText='';
+function setStatus(s){status.textContent=s}
+async function getWorker(){
+ if(!window.Tesseract) throw new Error('Không tải được bộ nhận dạng chữ. Kiểm tra mạng rồi tải lại trang.');
+ if(!worker){setStatus('Đang tải bộ nhận dạng chữ…');worker=await Tesseract.createWorker('vie+eng');}
+ return worker;
+}
+async function scanFrame(){
+ if(busy||!stream||video.readyState<2)return;
+ busy=true;
+ try{
+  const w=video.videoWidth,h=video.videoHeight;
+  if(!w||!h)throw new Error('Camera chưa sẵn sàng.');
+  canvas.width=w;canvas.height=h;ctx.drawImage(video,0,0,w,h);
+  const ocr=await getWorker();
+  setStatus('Đang đọc câu hỏi…');
+  const result=await ocr.recognize(canvas);
+  const text=(result.data.text||'').trim();
+  if(text && text!==lastText){
+   lastText=text;
+   output.value=text;
+   setStatus('Đã cập nhật văn bản nhận diện. Đang tiếp tục quét…');
+  }else setStatus(text?'Đang theo dõi — chưa thấy nội dung mới.':'Chưa đọc rõ chữ; hãy tăng ánh sáng hoặc đưa câu hỏi gần hơn.');
+ }catch(e){setStatus(e.message||'Không quét được. Thử lại.');}
+ finally{busy=false;}
+}
+startBtn.onclick=async()=>{
+ try{
+  stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+  video.srcObject=stream; await video.play();
+  startBtn.disabled=true;scanBtn.disabled=false;stopBtn.disabled=false;
+  scanning=true;setStatus('Camera đang bật. Bắt đầu nhận dạng…');
+  await scanFrame();
+  timer=setInterval(()=>{if(scanning&&!busy)scanFrame()},4500);
+ }catch(e){setStatus('Không mở được camera. Hãy mở trang bằng HTTPS và cho phép Safari truy cập Camera.');}
+};
+scanBtn.onclick=scanFrame;
+stopBtn.onclick=()=>{
+ scanning=false;clearInterval(timer);timer=null;
+ if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+ video.srcObject=null;startBtn.disabled=false;scanBtn.disabled=true;stopBtn.disabled=true;
+ setStatus('Đã dừng camera.');
+};
+document.getElementById('copy').onclick=async()=>{
+ try{await navigator.clipboard.writeText(output.value);setStatus('Đã sao chép câu hỏi.');}
+ catch(e){output.focus();output.select();setStatus('Hãy nhấn giữ phần chữ đã chọn rồi chọn Sao chép.');}
+};
+document.getElementById('ask').onclick=()=>{
+ const q=output.value.trim();
+ if(!q){setStatus('Chưa có câu hỏi để gửi.');return;}
+ const prompt='Hãy giúp tôi học câu hỏi sau: chọn đáp án phù hợp nếu là trắc nghiệm, giải thích ngắn gọn và nói rõ nếu đề thiếu dữ kiện.\\n\\n'+q;
+ window.open('https://chatgpt.com/?q='+encodeURIComponent(prompt),'_blank','noopener');
+};
+document.getElementById('clear').onclick=()=>{output.value='';lastText='';setStatus('Đã xóa nội dung.');};
+</script>
+</body>
+</html>
